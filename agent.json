@@ -1,0 +1,8 @@
+{
+  "site": "galpao",
+  "server": "http://localhost:9000",
+  "token": "",
+  "interval_sec": 60,
+  "loop": true,
+  "cameras": []
+}
