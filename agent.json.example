@@ -1,0 +1,14 @@
+{
+  "site": "galpao",
+  "server": "http://92.113.38.123:9999",
+  "token": "TOKEN_DO_SITE",
+  "interval_sec": 60,
+  "loop": true,
+  "cameras": [
+    { "name": "Cam 1", "ip": "192.168.1.10" },
+    { "name": "Cam 2", "ip": "192.168.1.11" }
+  ],
+  "speedtest": true,
+  "speed_download_bytes": 1048576,
+  "speed_upload_bytes": 524288
+}
