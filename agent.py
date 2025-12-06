@@ -23,11 +23,21 @@ def load_agent_config() -> Dict[str, Any]:
             cfg = {}
     # Env overrides
     site = os.getenv("AGENT_SITE", cfg.get("site", "default"))
-    server = os.getenv("AGENT_SERVER", cfg.get("server", "http://localhost:9000"))
+    server = os.getenv("AGENT_SERVER", cfg.get("server", "http://92.113.38.123:9999"))
     token = os.getenv("AGENT_TOKEN", cfg.get("token"))
     interval_sec = int(os.getenv("AGENT_INTERVAL_SEC", str(cfg.get("interval_sec", DEFAULT_INTERVAL))))
     loop = os.getenv("AGENT_LOOP", str(cfg.get("loop", "false"))).lower() in ("1", "true", "yes")
     cameras = cfg.get("cameras") if isinstance(cfg.get("cameras"), list) else []
+    # Speedtest options (optional)
+    speed_enabled = os.getenv("AGENT_SPEEDTEST", str(cfg.get("speedtest", "1"))).lower() in ("1", "true", "yes")
+    try:
+        speed_dl = int(os.getenv("AGENT_SPEEDTEST_DOWNLOAD_BYTES", str(cfg.get("speed_download_bytes", 1024 * 1024))))
+    except Exception:
+        speed_dl = 1024 * 1024
+    try:
+        speed_ul = int(os.getenv("AGENT_SPEEDTEST_UPLOAD_BYTES", str(cfg.get("speed_upload_bytes", 512 * 1024))))
+    except Exception:
+        speed_ul = 512 * 1024
     return {
         "site": site,
         "server": server.rstrip("/"),
@@ -35,6 +45,9 @@ def load_agent_config() -> Dict[str, Any]:
         "interval_sec": interval_sec,
         "loop": loop,
         "cameras": cameras,
+        "speedtest": speed_enabled,
+        "speed_download_bytes": speed_dl,
+        "speed_upload_bytes": speed_ul,
     }
 
 
@@ -112,6 +125,62 @@ def test_network() -> Dict[str, Any]:
     return net
 
 
+def bytes_to_mbps(byte_count: int, seconds: float) -> Optional[float]:
+    try:
+        if seconds <= 0:
+            return None
+        # Mbps = (bytes * 8) / (seconds * 1e6)
+        return round((byte_count * 8) / (seconds * 1_000_000), 2)
+    except Exception:
+        return None
+
+
+def speedtest(server: str, download_bytes: int, upload_bytes: int, token: Optional[str]) -> Dict[str, Any]:
+    """Measure download/upload throughput using API endpoints provided by the server.
+    Returns: { download_mbps, upload_mbps }
+    """
+    out: Dict[str, Any] = {"download_mbps": None, "upload_mbps": None}
+    headers = {"X-Agent-Token": token} if token else {}
+
+    # Download test
+    try:
+        url_dl = f"{server}/api/speedtest/download?size_bytes={max(1, int(download_bytes))}"
+        t0 = time.monotonic()
+        r = requests.get(url_dl, headers=headers, stream=True, timeout=15)
+        r.raise_for_status()
+        total = 0
+        for chunk in r.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+        dt = time.monotonic() - t0
+        out["download_mbps"] = bytes_to_mbps(total, dt)
+    except Exception:
+        pass
+
+    # Upload test
+    try:
+        url_ul = f"{server}/api/speedtest/upload"
+        payload = b"\x00" * max(1, int(upload_bytes))
+        t0 = time.monotonic()
+        r = requests.post(url_ul, headers=headers, data=payload, timeout=15)
+        r.raise_for_status()
+        # Prefer server-acknowledged bytes if available
+        acknowledged = None
+        try:
+            js = r.json()
+            acknowledged = int(js.get("received_bytes")) if isinstance(js, dict) else None
+        except Exception:
+            acknowledged = None
+        sent = acknowledged if acknowledged is not None else len(payload)
+        dt = time.monotonic() - t0
+        out["upload_mbps"] = bytes_to_mbps(sent, dt)
+    except Exception:
+        pass
+
+    return out
+
+
 def get_host_name() -> str:
     return platform.node() or os.getenv("COMPUTERNAME", "unknown-host")
 
@@ -169,6 +238,10 @@ def run_once(cfg: Dict[str, Any]) -> None:
 
     # 2) Testes de rede
     net = test_network()
+    # 2.1) Speedtest (opcional)
+    if cfg.get("speedtest"):
+        st = speedtest(server, cfg.get("speed_download_bytes", 1024 * 1024), cfg.get("speed_upload_bytes", 512 * 1024), token)
+        net.update(st)
 
     # 3) Pingar cameras
     cam_reports: List[Dict[str, Any]] = []
